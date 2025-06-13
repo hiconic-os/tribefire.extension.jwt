@@ -42,6 +42,7 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import com.braintribe.cfg.Configurable;
 import com.braintribe.cfg.Required;
 import com.braintribe.codec.marshaller.api.CharacterMarshaller;
+import com.braintribe.codec.marshaller.api.DecodingLenience;
 import com.braintribe.codec.marshaller.api.GmDeserializationOptions;
 import com.braintribe.gm.model.reason.Maybe;
 import com.braintribe.gm.model.reason.Reason;
@@ -218,9 +219,15 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 							.text(url + " unexpectedly responded with status code " + response.getStatusLine().getStatusCode()).toMaybe();
 				} else {
 					try (InputStream is = new ResponseEntityInputStream(response)) {
-
+						DecodingLenience decodingLenience = new DecodingLenience();
+						decodingLenience.setPropertyLenient(true);
+						
 						Jwks jwks = (Jwks) jsonMarshaller.unmarshall(is,
-								GmDeserializationOptions.deriveDefaults().setInferredRootType(Jwks.T).build());
+								GmDeserializationOptions.deriveDefaults() //
+								.setInferredRootType(Jwks.T) //
+								.setDecodingLenience(decodingLenience) //
+								.build());
+						
 						logger.debug(() -> "Parsed from " + url + ": " + jwks);
 						List<JwksKey> keys = jwks.getKeys();
 						for (JwksKey key : keys) {
