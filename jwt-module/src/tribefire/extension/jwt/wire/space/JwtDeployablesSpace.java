@@ -52,6 +52,7 @@ public class JwtDeployablesSpace implements WireSpace {
 		bean.setJsonMarshaller(tfPlatform.marshalling().jsonMarshaller());
 		bean.setConfiguration(deployable);
 		bean.setHttpClientProvider(http.clientProvider());
+		bean.setModuleClassLoader(module.moduleClassLoader());
 		return bean;
 	}
 }

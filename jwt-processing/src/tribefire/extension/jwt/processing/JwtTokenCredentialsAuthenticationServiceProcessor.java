@@ -63,6 +63,7 @@ import com.braintribe.model.user.User;
 import com.braintribe.transport.http.HttpClientProvider;
 import com.braintribe.transport.http.ResponseEntityInputStream;
 import com.braintribe.transport.http.util.HttpTools;
+import com.braintribe.utils.lcd.StringTools;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
@@ -71,6 +72,7 @@ import io.jsonwebtoken.Jwt;
 import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.MalformedJwtException;
+import io.jsonwebtoken.ProtectedHeader;
 import io.jsonwebtoken.SigningKeyResolverAdapter;
 import io.jsonwebtoken.security.SignatureException;
 import tribefire.extension.jwt.deployment.model.JwtTokenCredentialsAuthenticator;
@@ -86,6 +88,8 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 	private HttpClientProvider httpClientProvider;
 	private CharacterMarshaller jsonMarshaller;
 	private PeriodicInitialized<Map<String, Key>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
+
+	private ClassLoader moduleClassLoader;
 
 	/**
 	 * @param ms
@@ -116,75 +120,83 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 	protected Maybe<AuthenticateCredentialsResponse> authenticateCredentials(ServiceRequestContext context, AuthenticateCredentials request,
 			JwtTokenCredentials credentials) {
 
-		String token = credentials.getToken();
+		ClassLoader oldClassLoader = Thread.currentThread().getContextClassLoader();
+		Thread.currentThread().setContextClassLoader(moduleClassLoader);
+		try {
+			String token = credentials.getToken();
 
-		Maybe<Map<String, Key>> keyMapMaybe = keyMapHolder.get();
+			Maybe<Map<String, Key>> keyMapMaybe = keyMapHolder.get();
 
-		if (keyMapMaybe.isUnsatisfied()) {
-			String tbid = UUID.randomUUID().toString();
-			logger.error("Error while retrieving JWKS keys from " + configuration.getJwksUrl() + " (traceback=" + tbid + "): "
-					+ keyMapMaybe.whyUnsatisfied().stringify());
-			return Reasons.build(com.braintribe.gm.model.reason.essential.InternalError.T).text("Internal Error (traceback=" + tbid + ")").toMaybe();
-		}
+			if (keyMapMaybe.isUnsatisfied()) {
+				String tbid = UUID.randomUUID().toString();
+				logger.error("Error while retrieving JWKS keys from " + configuration.getJwksUrl() + " (traceback=" + tbid + "): "
+						+ keyMapMaybe.whyUnsatisfied().stringify());
+				return Reasons.build(com.braintribe.gm.model.reason.essential.InternalError.T).text("Internal Error (traceback=" + tbid + ")")
+						.toMaybe();
+			}
 
-		Map<String, Key> keyMap = keyMapMaybe.get();
+			Map<String, Key> keyMap = keyMapMaybe.get();
 
-		Maybe<Jwt<?, ?>> jwtMaybe = resolveJwt(token, keyMap);
+			Maybe<Jwt<?, ?>> jwtMaybe = resolveJwt(token, keyMap);
 
-		if (jwtMaybe.isUnsatisfied())
-			return jwtMaybe.whyUnsatisfied().asMaybe();
+			if (jwtMaybe.isUnsatisfied())
+				return jwtMaybe.whyUnsatisfied().asMaybe();
 
-		Jwt<?, ?> jwt = jwtMaybe.get();
+			Jwt<?, ?> jwt = jwtMaybe.get();
 
-		JwsHeader<?> header = (JwsHeader<?>) jwt.getHeader();
+			ProtectedHeader header = (ProtectedHeader) jwt.getHeader();
 
-		String keyId = header.getKeyId();
+			String keyId = header.getKeyId();
 
-		logger.debug(() -> "Successfully parsed token " + token + " with key " + keyId);
+			logger.debug(() -> "Successfully parsed token " + token + " with key " + keyId);
 
-		Claims body = (Claims) jwt.getBody();
+			Claims body = (Claims) jwt.getPayload();
 
-		String userId = (String) body.get(configuration.getUsernameClaim());
+			String userId = (String) body.get(configuration.getUsernameClaim());
 
-		User user = User.T.create();
-		user.setId(userId);
-		user.setName(userId);
+			User user = User.T.create();
+			user.setId(userId);
+			user.setName(userId);
 
-		Set<Role> roles = user.getRoles();
+			Set<Role> roles = user.getRoles();
 
-		Stream.of(configuration.getDefaultRoles(), getRolesFromToken(body)) //
-				.flatMap(Collection::stream)//
-				.distinct() //
-				.map(Roles::roleFromStr) //
-				.forEach(roles::add);
+			Stream.of(configuration.getDefaultRoles(), getRolesFromToken(body)) //
+					.flatMap(Collection::stream)//
+					.distinct() //
+					.map(Roles::roleFromStr) //
+					.forEach(roles::add);
 
-		AuthenticatedUser authenticatedUser = AuthenticatedUser.T.create();
-		authenticatedUser.setUser(user);
+			AuthenticatedUser authenticatedUser = AuthenticatedUser.T.create();
+			authenticatedUser.setUser(user);
 
-		// transfer properties
-		Set<String> propertiesClaims = configuration.getPropertiesClaims();
-		if (!propertiesClaims.isEmpty()) {
-			Map<String, String> properties = authenticatedUser.getProperties();
+			// transfer properties
+			Set<String> propertiesClaims = configuration.getPropertiesClaims();
+			if (!propertiesClaims.isEmpty()) {
+				Map<String, String> properties = authenticatedUser.getProperties();
 
-			for (String propClaim : propertiesClaims) {
-				Object value = body.get(propClaim);
-				if (value != null) {
-					properties.put(propClaim, value.toString());
+				for (String propClaim : propertiesClaims) {
+					Object value = body.get(propClaim);
+					if (value != null) {
+						properties.put(propClaim, value.toString());
+					}
 				}
 			}
+
+			// transfer expiry
+			Optional.ofNullable(body.getExpiration()) //
+					.ifPresent(authenticatedUser::setExpiryDate);
+
+			authenticatedUser.setInvalidateCredentialsOnLogout(configuration.getInvalidateTokenCredentialsOnLogout());
+
+			return Maybe.complete(authenticatedUser);
+
+		} finally {
+			Thread.currentThread().setContextClassLoader(oldClassLoader);
 		}
-
-		// transfer expiry
-		Optional.ofNullable(body.getExpiration()) //
-				.ifPresent(authenticatedUser::setExpiryDate);
-
-		authenticatedUser.setInvalidateCredentialsOnLogout(configuration.getInvalidateTokenCredentialsOnLogout());
-
-		return Maybe.complete(authenticatedUser);
 	}
 
 	private Maybe<Jwt<?, ?>> resolveJwt(String token, Map<String, Key> keyMap) {
-		JwtParser parser = Jwts.parserBuilder().setSigningKeyResolver(new SigningKeyResolverAdapter() {
+		JwtParser parser = Jwts.parser().setSigningKeyResolver(new SigningKeyResolverAdapter() {
 			@Override
 			public Key resolveSigningKey(JwsHeader jwsHeader, Claims claims) {
 				// null may be returned here from the map which leads to an expected IllegalArgumentException
@@ -221,13 +233,12 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 					try (InputStream is = new ResponseEntityInputStream(response)) {
 						DecodingLenience decodingLenience = new DecodingLenience();
 						decodingLenience.setPropertyLenient(true);
-						
-						Jwks jwks = (Jwks) jsonMarshaller.unmarshall(is,
-								GmDeserializationOptions.deriveDefaults() //
+
+						Jwks jwks = (Jwks) jsonMarshaller.unmarshall(is, GmDeserializationOptions.deriveDefaults() //
 								.setInferredRootType(Jwks.T) //
 								.setDecodingLenience(decodingLenience) //
 								.build());
-						
+
 						logger.debug(() -> "Parsed from " + url + ": " + jwks);
 						List<JwksKey> keys = jwks.getKeys();
 						for (JwksKey key : keys) {
@@ -279,6 +290,15 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 
 		Set<String> allRolesCombined = new HashSet<>();
 
+		String rolesClaim = configuration.getRolesClaim();
+		if (!StringTools.isBlank(rolesClaim)) {
+			Object rolesObject = claims.get(rolesClaim);
+			if (rolesObject != null) {
+				Stream<String> rawRoleValues = claimValuesAsStream(rolesObject);
+				rawRoleValues.forEach(allRolesCombined::add);
+			}
+		}
+
 		for (Map.Entry<String, String> rolesEntry : configuration.getClaimRolesAndPrefixes().entrySet()) {
 
 			String key = rolesEntry.getKey();
@@ -308,6 +328,12 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		} else {
 			return Stream.empty();
 		}
+	}
+
+	@Configurable
+	@Required
+	public void setModuleClassLoader(ClassLoader moduleClassLoader) {
+		this.moduleClassLoader = moduleClassLoader;
 	}
 
 }

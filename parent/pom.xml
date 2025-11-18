@@ -25,7 +25,7 @@ limitations under the License.
         <V.com.braintribe.gm>[2.0,2.1)</V.com.braintribe.gm>
         <V.com.braintribe.wire>[2.0,2.1)</V.com.braintribe.wire>
         <V.tribefire.cortex>[3.0,3.1)</V.tribefire.cortex>
-        <V.io.jsonwebtoken>0.11.2</V.io.jsonwebtoken>
+        <V.io.jsonwebtoken>0.12.6</V.io.jsonwebtoken>
 	</properties>
     <licenses>
         <license>

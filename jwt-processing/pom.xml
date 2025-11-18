@@ -48,6 +48,11 @@ limitations under the License.
             <artifactId>http-transport</artifactId>
             <version>${V.com.braintribe.gm}</version>
         </dependency>
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-api</artifactId>
+			<version>${V.io.jsonwebtoken}</version>
+		</dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-impl</artifactId>
