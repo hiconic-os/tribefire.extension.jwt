@@ -32,10 +32,14 @@ public interface JwtTokenCredentialsAuthenticator extends ServiceProcessor {
 	String defaultRoles = "defaultRoles";
 	String jwksUrl = "jwksUrl";
 	String usernameClaim = "usernameClaim";
+	String emailClaim = "emailClaim";
+	String firstNameClaim = "firstNameClaim";
+	String lastNameClaim = "lastNameClaim";
 	String rolesClaim = "rolesClaim";
 	String claimRolesAndPrefixes = "claimRolesAndPrefixes";
 	String propertiesClaims = "propertiesClaims";
 	String invalidateTokenCredentialsOnLogout = "invalidateTokenCredentialsOnLogout";
+	String syncWithAuthAccess = "syncWithAuthAccess";
 
 	@Name("Default Roles")
 	@Description("A set of roles users should get.")
@@ -52,6 +56,24 @@ public interface JwtTokenCredentialsAuthenticator extends ServiceProcessor {
 	@Initializer("'sub'")
 	String getUsernameClaim();
 	void setUsernameClaim(String usernameClaim);
+
+	@Name("Email Claim")
+	@Description("The claim that contains the email address.")
+	@Initializer("'upn'")
+	String getEmailClaim();
+	void setEmailClaim(String emailClaim);
+
+	@Name("First Name Claim")
+	@Description("The claim that contains the user's first name.")
+	@Initializer("'given_name'")
+	String getFirstNameClaim();
+	void setFirstNameClaim(String firstNameClaim);
+
+	@Name("Last Name Claim")
+	@Description("The claim that contains the user's last/family name.")
+	@Initializer("'family_name'")
+	String getLastNameClaim();
+	void setLastNameClaim(String lastNameClaim);
 
 	@Name("Roles Claim")
 	@Description("The claim that contains the user roles.")
@@ -73,4 +95,9 @@ public interface JwtTokenCredentialsAuthenticator extends ServiceProcessor {
 	@Initializer("true")
 	boolean getInvalidateTokenCredentialsOnLogout();
 	void setInvalidateTokenCredentialsOnLogout(boolean invalidateTokenCredentialsOnLogout);
+
+	@Name("Sync with Auth Access")
+	@Initializer("false")
+	boolean getSyncWithAuthAccess();
+	void setSyncWithAuthAccess(boolean syncWithAuthAccess);
 }

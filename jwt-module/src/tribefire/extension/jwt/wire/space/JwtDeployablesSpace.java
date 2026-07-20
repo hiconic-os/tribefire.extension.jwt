@@ -53,6 +53,8 @@ public class JwtDeployablesSpace implements WireSpace {
 		bean.setConfiguration(deployable);
 		bean.setHttpClientProvider(http.clientProvider());
 		bean.setModuleClassLoader(module.moduleClassLoader());
+		bean.setAuthSessionProvider(() -> tfPlatform.systemUserRelated().sessionFactory().newSession("auth"));
+		bean.setLocking(tfPlatform.cluster().locking());
 		return bean;
 	}
 }

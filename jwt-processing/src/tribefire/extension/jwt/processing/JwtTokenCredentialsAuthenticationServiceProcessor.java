@@ -23,15 +23,22 @@ import java.security.KeyFactory;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.RSAPublicKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.locks.Lock;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import org.apache.http.HttpStatus;
@@ -51,9 +58,13 @@ import com.braintribe.gm.model.reason.essential.CommunicationError;
 import com.braintribe.gm.model.reason.essential.IoError;
 import com.braintribe.gm.model.security.reason.InvalidCredentials;
 import com.braintribe.logging.Logger;
+import com.braintribe.model.processing.lock.api.Locking;
+import com.braintribe.model.processing.query.fluent.EntityQueryBuilder;
 import com.braintribe.model.processing.securityservice.impl.AbstractAuthenticateCredentialsServiceProcessor;
 import com.braintribe.model.processing.securityservice.impl.Roles;
 import com.braintribe.model.processing.service.api.ServiceRequestContext;
+import com.braintribe.model.processing.session.api.persistence.PersistenceGmSession;
+import com.braintribe.model.query.EntityQuery;
 import com.braintribe.model.securityservice.AuthenticateCredentials;
 import com.braintribe.model.securityservice.AuthenticateCredentialsResponse;
 import com.braintribe.model.securityservice.AuthenticatedUser;
@@ -88,6 +99,8 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 	private HttpClientProvider httpClientProvider;
 	private CharacterMarshaller jsonMarshaller;
 	private PeriodicInitialized<Map<String, Key>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
+	private Supplier<PersistenceGmSession> authSessionProvider = null;
+	private Locking locking = null;
 
 	private ClassLoader moduleClassLoader;
 
@@ -112,8 +125,20 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 
 	@Required
 	@Configurable
+	public void setAuthSessionProvider(Supplier<PersistenceGmSession> authSessionProvider) {
+		this.authSessionProvider = authSessionProvider;
+	}
+
+	@Required
+	@Configurable
 	public void setHttpClientProvider(HttpClientProvider httpClientProvider) {
 		this.httpClientProvider = httpClientProvider;
+	}
+
+	@Required
+	@Configurable
+	public void setLocking(Locking locking) {
+		this.locking = locking;
 	}
 
 	@Override
@@ -158,6 +183,22 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 			user.setId(userId);
 			user.setName(userId);
 
+			String emailNameClaim = configuration.getEmailClaim();
+			if (!StringTools.isBlank(emailNameClaim)) {
+				String email = (String) body.get(emailNameClaim);
+				user.setEmail(email);
+			}
+			String firstNameClaim = configuration.getFirstNameClaim();
+			if (!StringTools.isBlank(firstNameClaim)) {
+				String firstName = (String) body.get(firstNameClaim);
+				user.setFirstName(firstName);
+			}
+			String lastNameClaim = configuration.getLastNameClaim();
+			if (!StringTools.isBlank(lastNameClaim)) {
+				String lastName = (String) body.get(lastNameClaim);
+				user.setLastName(lastName);
+			}
+
 			Set<Role> roles = user.getRoles();
 
 			Stream.of(configuration.getDefaultRoles(), getRolesFromToken(body)) //
@@ -165,6 +206,10 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 					.distinct() //
 					.map(Roles::roleFromStr) //
 					.forEach(roles::add);
+
+			if (configuration.getSyncWithAuthAccess()) {
+				syncUserWithAuthAccess(user);
+			}
 
 			AuthenticatedUser authenticatedUser = AuthenticatedUser.T.create();
 			authenticatedUser.setUser(user);
@@ -193,6 +238,111 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		} finally {
 			Thread.currentThread().setContextClassLoader(oldClassLoader);
 		}
+	}
+
+	private void syncUserWithAuthAccess(User sourceUser) {
+		if (authSessionProvider == null) {
+			logger.info(() -> "No auth session provider supplied.");
+			return;
+		}
+		PersistenceGmSession authSession = authSessionProvider.get();
+
+		EntityQuery userQuery = EntityQueryBuilder.from(User.T).where().property(User.name).eq(sourceUser.getName()).done();
+		User targetUser = authSession.query().entities(userQuery).first();
+		if (targetUser == null) {
+			Lock lock = locking.forIdentifier("create-user-" + sourceUser.getName()).writeLock();
+			lock.lock();
+			try {
+				targetUser = authSession.query().entities(userQuery).first();
+				if (targetUser == null) {
+					targetUser = authSession.create(User.T);
+					targetUser.setId(sourceUser.getName());
+					targetUser.setName(sourceUser.getName());
+				}
+			} finally {
+				lock.unlock();
+			}
+		}
+
+		targetUser.setLastLogin(new Date());
+		set(targetUser.getEmail(), sourceUser.getEmail(), targetUser::setEmail);
+		set(targetUser.getFirstName(), sourceUser.getFirstName(), targetUser::setFirstName);
+		set(targetUser.getLastName(), sourceUser.getLastName(), targetUser::setLastName);
+
+		List<String> rolesToBeAdded = new ArrayList<>();
+		List<String> rolesToBeRemoved = new ArrayList<>(targetUser.getRoles().stream().map(Role::getName).toList());
+
+		for (Role sourceRole : sourceUser.getRoles()) {
+			String roleName = sourceRole.getName();
+			if (!rolesToBeRemoved.remove(roleName)) {
+				rolesToBeAdded.add(roleName);
+			}
+		}
+		logger.debug(() -> "User " + sourceUser.getName() + ": roles to be added: " + rolesToBeAdded + ", roles to be removed: " + rolesToBeRemoved);
+
+		if (!rolesToBeAdded.isEmpty() || !rolesToBeRemoved.isEmpty()) {
+
+			// Note: we do not lock per user because it may create roles that are used to multiple users
+			Lock lock = locking.forIdentifier("adapt-user-roles").writeLock();
+			lock.lock();
+			try {
+
+				if (!rolesToBeAdded.isEmpty()) {
+					Map<String, Role> toBeAddedMap = acquireRoles(authSession, new HashSet<>(rolesToBeAdded));
+					for (Role toBeAdded : toBeAddedMap.values()) {
+						targetUser.getRoles().add(toBeAdded);
+					}
+				}
+				if (!rolesToBeRemoved.isEmpty()) {
+					for (Iterator<Role> roleIt = targetUser.getRoles().iterator(); roleIt.hasNext();) {
+						Role role = roleIt.next();
+						if (rolesToBeRemoved.contains(role.getName())) {
+							roleIt.remove();
+						}
+					}
+				}
+
+			} finally {
+				lock.unlock();
+			}
+		}
+
+		authSession.commit();
+	}
+
+	private static Map<String, Role> acquireRoles(PersistenceGmSession authSession, Set<String> names) {
+		EntityQuery roleQuery = EntityQueryBuilder.from(Role.T).where().property(Role.name).in(names).done();
+		List<Role> list = authSession.query().entities(roleQuery).list();
+		Map<String, Role> result = new HashMap<>();
+		List<String> rolesToCreate = new ArrayList<>(names);
+		for (Role role : list) {
+			result.put(role.getName(), role);
+			rolesToCreate.remove(role.getName());
+		}
+		for (String roleName : rolesToCreate) {
+			Role newRole = authSession.create(Role.T);
+			newRole.setName(roleName);
+			result.put(roleName, newRole);
+		}
+		return result;
+	}
+
+	public static <T> boolean set(T oldValue, T newValue, Consumer<T> setter) {
+		if (oldValue == null && newValue == null) {
+			return false;
+		}
+		if (oldValue == null || newValue == null) {
+			setter.accept(newValue);
+			return true;
+		}
+		if (oldValue == newValue) {
+			return false;
+		}
+		if (!oldValue.equals(newValue)) {
+			setter.accept(newValue);
+			return true;
+		}
+		return false;
 	}
 
 	private Maybe<Jwt<?, ?>> resolveJwt(String token, Map<String, Key> keyMap) {
