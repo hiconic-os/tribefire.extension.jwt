@@ -1,7 +1,7 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0">
     <modelVersion>4.0.0</modelVersion>
     <parent><groupId>tribefire.extension.jwt</groupId><artifactId>parent</artifactId><version>[1.0,1.1)</version></parent>
-    <artifactId>jwt-rx-module</artifactId><version>1.0.1</version>
+    <artifactId>jwt-rx-module</artifactId><version>1.0.2</version>
     <dependencies>
         <dependency><groupId>tribefire.extension.jwt</groupId><artifactId>jwt-configuration-model</artifactId><version>${V.tribefire.extension.jwt}</version></dependency>
         <dependency><groupId>tribefire.extension.jwt</groupId><artifactId>jwt-processing</artifactId><version>${V.tribefire.extension.jwt}</version></dependency>
