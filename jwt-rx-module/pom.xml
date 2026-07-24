@@ -1,0 +1,16 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent><groupId>tribefire.extension.jwt</groupId><artifactId>parent</artifactId><version>[1.0,1.1)</version></parent>
+    <artifactId>jwt-rx-module</artifactId><version>1.0.1</version>
+    <dependencies>
+        <dependency><groupId>tribefire.extension.jwt</groupId><artifactId>jwt-configuration-model</artifactId><version>${V.tribefire.extension.jwt}</version></dependency>
+        <dependency><groupId>tribefire.extension.jwt</groupId><artifactId>jwt-processing</artifactId><version>${V.tribefire.extension.jwt}</version></dependency>
+        <dependency><groupId>hiconic.platform.reflex</groupId><artifactId>reflex-module-api</artifactId><version>${V.hiconic.platform.reflex}</version></dependency>
+        <dependency><groupId>hiconic.platform.reflex</groupId><artifactId>security-module-api</artifactId><version>${V.hiconic.platform.reflex}</version></dependency>
+        <dependency><groupId>hiconic.platform.reflex</groupId><artifactId>security-rx-module</artifactId><version>${V.hiconic.platform.reflex}</version></dependency>
+        <dependency><groupId>hiconic.platform.reflex</groupId><artifactId>access-module-api</artifactId><version>${V.hiconic.platform.reflex}</version></dependency>
+        <dependency><groupId>hiconic.platform.reflex</groupId><artifactId>access-rx-module</artifactId><version>${V.hiconic.platform.reflex}</version></dependency>
+        <dependency><groupId>hiconic.platform.reflex</groupId><artifactId>cluster-module-api</artifactId><version>${V.hiconic.platform.reflex}</version></dependency>
+        <dependency><groupId>com.braintribe.gm</groupId><artifactId>http-transport</artifactId><version>${V.com.braintribe.gm}</version></dependency>
+    </dependencies>
+</project>

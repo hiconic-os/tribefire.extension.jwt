@@ -34,6 +34,12 @@ limitations under the License.
     </licenses>
     <dependencies>
         <dependency>
+            <groupId>tribefire.extension.jwt</groupId>
+            <artifactId>jwt-configuration-model</artifactId>
+            <version>${V.tribefire.extension.jwt}</version>
+            <?tag asset ?>
+        </dependency>
+        <dependency>
             <groupId>com.braintribe.gm</groupId>
             <artifactId>root-model</artifactId>
             <version>${V.com.braintribe.gm}</version>

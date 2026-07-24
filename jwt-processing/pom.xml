@@ -33,7 +33,7 @@ limitations under the License.
     <dependencies>
         <dependency>
             <groupId>tribefire.extension.jwt</groupId>
-            <artifactId>jwt-deployment-model</artifactId>
+            <artifactId>jwt-configuration-model</artifactId>
             <version>${V.tribefire.extension.jwt}</version>
             <?tag asset ?>
         </dependency>
@@ -56,6 +56,11 @@ limitations under the License.
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-impl</artifactId>
+            <version>${V.io.jsonwebtoken}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
             <version>${V.io.jsonwebtoken}</version>
         </dependency>
         <dependency>

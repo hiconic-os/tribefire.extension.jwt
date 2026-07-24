@@ -86,16 +86,16 @@ import io.jsonwebtoken.MalformedJwtException;
 import io.jsonwebtoken.ProtectedHeader;
 import io.jsonwebtoken.SigningKeyResolverAdapter;
 import io.jsonwebtoken.security.SignatureException;
-import tribefire.extension.jwt.deployment.model.JwtTokenCredentialsAuthenticator;
 import tribefire.extension.jwt.model.Jwks;
 import tribefire.extension.jwt.model.JwksKey;
+import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
 
 public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractAuthenticateCredentialsServiceProcessor<JwtTokenCredentials> {
 	private static final Reason INVALID_CREDENTIALS = Reasons.build(InvalidCredentials.T).text("Invalid Credentials").toReason();
 
 	private static final Logger logger = Logger.getLogger(JwtTokenCredentialsAuthenticationServiceProcessor.class);
 
-	private JwtTokenCredentialsAuthenticator configuration;
+	private JwtAuthenticationConfiguration configuration;
 	private HttpClientProvider httpClientProvider;
 	private CharacterMarshaller jsonMarshaller;
 	private PeriodicInitialized<Map<String, Key>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
@@ -119,7 +119,7 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 	}
 
 	@Required
-	public void setConfiguration(JwtTokenCredentialsAuthenticator configuration) {
+	public void setConfiguration(JwtAuthenticationConfiguration configuration) {
 		this.configuration = configuration;
 	}
 
