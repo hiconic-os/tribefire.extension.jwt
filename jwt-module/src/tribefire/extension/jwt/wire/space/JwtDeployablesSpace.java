@@ -21,7 +21,7 @@ import com.braintribe.wire.api.annotation.Managed;
 import com.braintribe.wire.api.space.WireSpace;
 
 import tribefire.extension.jwt.deployment.model.JwtTokenCredentialsAuthenticator;
-import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfigurationSet;
+import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
 import tribefire.extension.jwt.processing.JwtTokenCredentialsAuthenticationServiceProcessor;
 import tribefire.module.wire.contract.ModuleReflectionContract;
 import tribefire.module.wire.contract.ModuleResourcesContract;
@@ -49,7 +49,7 @@ public class JwtDeployablesSpace implements WireSpace {
 	@Managed
 	public JwtTokenCredentialsAuthenticationServiceProcessor jwtCredentialsAuthenticator(ExpertContext<JwtTokenCredentialsAuthenticator> context) {
 		JwtTokenCredentialsAuthenticator deployable = context.getDeployable();
-		JwtAuthenticationConfigurationSet configuration = deployable;
+		JwtAuthenticationConfiguration configuration = deployable;
 		JwtTokenCredentialsAuthenticationServiceProcessor bean = new JwtTokenCredentialsAuthenticationServiceProcessor();
 		bean.setJsonMarshaller(tfPlatform.marshalling().jsonMarshaller());
 		bean.setConfigurationSet(configuration);

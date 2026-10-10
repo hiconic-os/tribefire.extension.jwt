@@ -19,7 +19,7 @@ import hiconic.rx.locking.api.LockingContract;
 import hiconic.rx.module.api.wire.RxModuleContract;
 import hiconic.rx.module.api.wire.RxPlatformContract;
 import hiconic.rx.security.api.SecurityExtensionContract;
-import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfigurationSet;
+import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
 import tribefire.extension.jwt.processing.JwtTokenCredentialsAuthenticationServiceProcessor;
 
 @Managed
@@ -41,13 +41,13 @@ public class JwtRxModuleSpace implements RxModuleContract {
 	}
 
 	@Managed
-	private JwtAuthenticationConfigurationSet configuration() {
-		return platform.configuration().readConfig(JwtAuthenticationConfigurationSet.T).get();
+	private JwtAuthenticationConfiguration configuration() {
+		return platform.configuration().readConfig(JwtAuthenticationConfiguration.T).get();
 	}
 
 	@Managed
 	private JwtTokenCredentialsAuthenticationServiceProcessor jwtCredentialsAuthenticator() {
-		JwtAuthenticationConfigurationSet config = configuration();
+		JwtAuthenticationConfiguration config = configuration();
 		JwtTokenCredentialsAuthenticationServiceProcessor bean = new JwtTokenCredentialsAuthenticationServiceProcessor();
 		bean.setConfigurationSet(config);
 		bean.setJsonMarshaller(platform.marshalling().jsonMarshaller());

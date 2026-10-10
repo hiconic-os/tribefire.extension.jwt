@@ -19,9 +19,9 @@ import com.braintribe.model.extensiondeployment.ServiceProcessor;
 import com.braintribe.model.generic.reflection.EntityType;
 import com.braintribe.model.generic.reflection.EntityTypes;
 
-import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfigurationSet;
+import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
 
-public interface JwtTokenCredentialsAuthenticator extends ServiceProcessor, JwtAuthenticationConfigurationSet {
+public interface JwtTokenCredentialsAuthenticator extends ServiceProcessor, JwtAuthenticationConfiguration {
 
 	EntityType<JwtTokenCredentialsAuthenticator> T = EntityTypes.T(JwtTokenCredentialsAuthenticator.class);
 }

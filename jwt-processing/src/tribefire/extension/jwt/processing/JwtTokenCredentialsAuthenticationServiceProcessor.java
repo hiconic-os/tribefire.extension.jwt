@@ -92,8 +92,8 @@ import io.jsonwebtoken.lang.Collections;
 import io.jsonwebtoken.security.SignatureException;
 import tribefire.extension.jwt.model.Jwks;
 import tribefire.extension.jwt.model.JwksKey;
+import tribefire.extension.jwt.model.configuration.JwtTrustProvider;
 import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
-import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfigurationSet;
 import tribefire.extension.jwt.model.configuration.RoleTransformationConfig;
 import tribefire.extension.jwt.model.configuration.RoleTransformationRegex;
 import tribefire.extension.jwt.model.configuration.RoleTransformationRemovePrefix;
@@ -105,10 +105,10 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 
 	private static final Logger logger = Logger.getLogger(JwtTokenCredentialsAuthenticationServiceProcessor.class);
 
-	private JwtAuthenticationConfigurationSet configurationSet;
+	private JwtAuthenticationConfiguration configurationSet;
 	private HttpClientProvider httpClientProvider;
 	private CharacterMarshaller jsonMarshaller;
-	private PeriodicInitialized<Map<String, Pair<Key, JwtAuthenticationConfiguration>>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
+	private PeriodicInitialized<Map<String, Pair<Key, JwtTrustProvider>>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
 	private Supplier<PersistenceGmSession> authSessionProvider = null;
 	private Locking locking = null;
 
@@ -129,18 +129,18 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 	}
 
 	@Required
-	public void setConfiguration(JwtAuthenticationConfiguration configuration) {
-		if (configurationSet != null && !configurationSet.getConfigurations().isEmpty()) {
+	public void setConfiguration(JwtTrustProvider configuration) {
+		if (configurationSet != null && !configurationSet.getTrustProviders().isEmpty()) {
 			throw new IllegalStateException("Canot accept a singular configuration (" + configuration
 					+ ") over a already configured set of configurations (" + configurationSet + ").");
 		}
 		if (configurationSet == null) {
-			configurationSet = JwtAuthenticationConfigurationSet.T.create();
-			configurationSet.getConfigurations().add(configuration);
+			configurationSet = JwtAuthenticationConfiguration.T.create();
+			configurationSet.getTrustProviders().add(configuration);
 		}
 	}
 	@Required
-	public void setConfigurationSet(JwtAuthenticationConfigurationSet set) {
+	public void setConfigurationSet(JwtAuthenticationConfiguration set) {
 		this.configurationSet = set;
 	}
 
@@ -171,7 +171,7 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		try {
 			String token = credentials.getToken();
 
-			Maybe<Map<String, Pair<Key, JwtAuthenticationConfiguration>>> keyMapMaybe = keyMapHolder.get();
+			Maybe<Map<String, Pair<Key, JwtTrustProvider>>> keyMapMaybe = keyMapHolder.get();
 
 			if (keyMapMaybe.isUnsatisfied()) {
 				String tbid = UUID.randomUUID().toString();
@@ -180,15 +180,15 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 						.toMaybe();
 			}
 
-			Map<String, Pair<Key, JwtAuthenticationConfiguration>> keyMap = keyMapMaybe.get();
+			Map<String, Pair<Key, JwtTrustProvider>> keyMap = keyMapMaybe.get();
 
-			Maybe<Pair<Jwt<?, ?>, JwtAuthenticationConfiguration>> jwtMaybe = resolveJwt(token, keyMap);
+			Maybe<Pair<Jwt<?, ?>, JwtTrustProvider>> jwtMaybe = resolveJwt(token, keyMap);
 
 			if (jwtMaybe.isUnsatisfied())
 				return jwtMaybe.whyUnsatisfied().asMaybe();
 
 			Jwt<?, ?> jwt = jwtMaybe.get().first;
-			JwtAuthenticationConfiguration configuration = jwtMaybe.get().second;
+			JwtTrustProvider configuration = jwtMaybe.get().second;
 
 			ProtectedHeader header = (ProtectedHeader) jwt.getHeader();
 
@@ -366,9 +366,9 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		return false;
 	}
 
-	private Maybe<Pair<Jwt<?, ?>, JwtAuthenticationConfiguration>> resolveJwt(String token,
-			Map<String, Pair<Key, JwtAuthenticationConfiguration>> keyMap) {
-		for (Pair<Key, JwtAuthenticationConfiguration> pair : keyMap.values()) {
+	private Maybe<Pair<Jwt<?, ?>, JwtTrustProvider>> resolveJwt(String token,
+			Map<String, Pair<Key, JwtTrustProvider>> keyMap) {
+		for (Pair<Key, JwtTrustProvider> pair : keyMap.values()) {
 			JwtParser parser = Jwts.parser().setSigningKeyResolver(new SigningKeyResolverAdapter() {
 				@Override
 				public Key resolveSigningKey(JwsHeader jwsHeader, Claims claims) {
@@ -389,16 +389,16 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		return INVALID_CREDENTIALS.asMaybe();
 	}
 
-	private Maybe<Map<String, Pair<Key, JwtAuthenticationConfiguration>>> getJwksKeys() {
+	private Maybe<Map<String, Pair<Key, JwtTrustProvider>>> getJwksKeys() {
 
 		if (configurationSet == null) {
 			logger.debug("No JWKS configuration available.");
 			return Maybe.complete(Collections.emptyMap());
 		}
 
-		Map<String, Pair<Key, JwtAuthenticationConfiguration>> keyMap = new LinkedHashMap<>();
+		Map<String, Pair<Key, JwtTrustProvider>> keyMap = new LinkedHashMap<>();
 
-		for (JwtAuthenticationConfiguration configuration : configurationSet.getConfigurations()) {
+		for (JwtTrustProvider configuration : configurationSet.getTrustProviders()) {
 			String url = configuration.getJwksUrl();
 
 			logger.debug(() -> "Trying to get JWKS from: " + url);
@@ -468,7 +468,7 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		return Maybe.complete(keyMap);
 	}
 
-	protected Collection<String> getRolesFromToken(JwtAuthenticationConfiguration configuration, Map<String, Object> claims) {
+	protected Collection<String> getRolesFromToken(JwtTrustProvider configuration, Map<String, Object> claims) {
 
 		Set<String> allRolesCombined = new HashSet<>();
 

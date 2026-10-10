@@ -29,7 +29,7 @@ import com.sun.net.httpserver.HttpServer;
 
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
-import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
+import tribefire.extension.jwt.model.configuration.JwtTrustProvider;
 import tribefire.extension.jwt.model.configuration.RoleTransformationRegex;
 import tribefire.extension.jwt.model.configuration.RoleTransformationRemovePrefix;
 import tribefire.extension.jwt.model.configuration.RoleTransformationToLowerCase;
@@ -63,7 +63,7 @@ public class JwtAuthenticationProcessorTest {
 			String token = Jwts.builder().setHeaderParam("kid", "test-key").claim("upn", "jwt-user").claim("email", "jwt-user@example.org")
 					.claim("roles", List.of("clerk", "report-analyst")).signWith(keyPair.getPrivate(), SignatureAlgorithm.RS256).compact();
 
-			JwtAuthenticationConfiguration configuration = JwtAuthenticationConfiguration.T.create();
+			JwtTrustProvider configuration = JwtTrustProvider.T.create();
 			configuration.setJwksUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/jwks");
 			configuration.setUsernameClaim("upn");
 			configuration.setEmailClaim("email");
@@ -125,7 +125,7 @@ public class JwtAuthenticationProcessorTest {
 					.claim("roles", List.of("TheMeanHelloPrefixclerk", "TheMeanWorldPrefixreport-analyst", "some-role", "FixedPrefix  WORLD  "))
 					.signWith(keyPair.getPrivate(), SignatureAlgorithm.RS256).compact();
 
-			JwtAuthenticationConfiguration configuration = JwtAuthenticationConfiguration.T.create();
+			JwtTrustProvider configuration = JwtTrustProvider.T.create();
 			configuration.setJwksUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/jwks");
 			configuration.setUsernameClaim("upn");
 			configuration.setEmailClaim("email");
