@@ -43,18 +43,6 @@ public interface JwtAuthenticationConfiguration extends GenericEntity {
 	boolean getEnabled();
 	void setEnabled(boolean enabled);
 
-	@Initializer("'auth'")
-	String getAuthAccessId();
-	void setAuthAccessId(String authAccessId);
-
-	@Initializer("false")
-	boolean getAcceptSslCertificates();
-	void setAcceptSslCertificates(boolean acceptSslCertificates);
-
-	@Initializer("600000L")
-	long getKeyReloadIntervalInMs();
-	void setKeyReloadIntervalInMs(long keyReloadIntervalInMs);
-
 	@Name("Default Roles")
 	@Description("A set of roles users should get.")
 	Set<String> getDefaultRoles();
@@ -114,4 +102,8 @@ public interface JwtAuthenticationConfiguration extends GenericEntity {
 	@Initializer("false")
 	boolean getSyncWithAuthAccess();
 	void setSyncWithAuthAccess(boolean syncWithAuthAccess);
+
+	@Name("Role Transformations")
+	Set<RoleTransformationConfig> getRoleTransformationConfiguration();
+	void setRoleTransformationConfiguration(Set<RoleTransformationConfig> roleTransformationConfiguration);
 }

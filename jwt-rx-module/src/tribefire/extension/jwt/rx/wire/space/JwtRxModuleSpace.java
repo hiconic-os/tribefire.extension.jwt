@@ -19,33 +19,37 @@ import hiconic.rx.locking.api.LockingContract;
 import hiconic.rx.module.api.wire.RxModuleContract;
 import hiconic.rx.module.api.wire.RxPlatformContract;
 import hiconic.rx.security.api.SecurityExtensionContract;
-import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
+import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfigurationSet;
 import tribefire.extension.jwt.processing.JwtTokenCredentialsAuthenticationServiceProcessor;
 
 @Managed
 public class JwtRxModuleSpace implements RxModuleContract {
 
-	@Import private RxPlatformContract platform;
-	@Import private SecurityExtensionContract security;
-	@Import private AccessContract access;
-	@Import private LockingContract locking;
+	@Import
+	private RxPlatformContract platform;
+	@Import
+	private SecurityExtensionContract security;
+	@Import
+	private AccessContract access;
+	@Import
+	private LockingContract locking;
 
 	@Override
 	public void onDeploy() {
-		if (configuration().getEnabled())
+		if (configuration().enabled())
 			security.registerCredentialProcessor(JwtTokenCredentials.T, jwtCredentialsAuthenticator());
 	}
 
 	@Managed
-	private JwtAuthenticationConfiguration configuration() {
-		return platform.configuration().readConfig(JwtAuthenticationConfiguration.T).get();
+	private JwtAuthenticationConfigurationSet configuration() {
+		return platform.configuration().readConfig(JwtAuthenticationConfigurationSet.T).get();
 	}
 
 	@Managed
 	private JwtTokenCredentialsAuthenticationServiceProcessor jwtCredentialsAuthenticator() {
-		JwtAuthenticationConfiguration config = configuration();
+		JwtAuthenticationConfigurationSet config = configuration();
 		JwtTokenCredentialsAuthenticationServiceProcessor bean = new JwtTokenCredentialsAuthenticationServiceProcessor();
-		bean.setConfiguration(config);
+		bean.setConfigurationSet(config);
 		bean.setJsonMarshaller(platform.marshalling().jsonMarshaller());
 		bean.setHttpClientProvider(httpClientProvider());
 		bean.setModuleClassLoader(JwtRxModuleSpace.class.getClassLoader());
@@ -64,8 +68,6 @@ public class JwtRxModuleSpace implements RxModuleContract {
 
 	@Managed
 	private SslSocketFactoryProvider sslSocketFactoryProvider() {
-		return configuration().getAcceptSslCertificates()
-				? new EasySslSocketFactoryProvider()
-				: new StrictSslSocketFactoryProvider();
+		return configuration().getAcceptSslCertificates() ? new EasySslSocketFactoryProvider() : new StrictSslSocketFactoryProvider();
 	}
 }

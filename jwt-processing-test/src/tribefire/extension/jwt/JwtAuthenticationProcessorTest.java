@@ -30,6 +30,10 @@ import com.sun.net.httpserver.HttpServer;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
+import tribefire.extension.jwt.model.configuration.RoleTransformationRegex;
+import tribefire.extension.jwt.model.configuration.RoleTransformationRemovePrefix;
+import tribefire.extension.jwt.model.configuration.RoleTransformationToLowerCase;
+import tribefire.extension.jwt.model.configuration.RoleTransformationTrim;
 import tribefire.extension.jwt.processing.JwtTokenCredentialsAuthenticationServiceProcessor;
 
 public class JwtAuthenticationProcessorTest {
@@ -56,13 +60,8 @@ public class JwtAuthenticationProcessorTest {
 		server.start();
 
 		try {
-			String token = Jwts.builder()
-					.setHeaderParam("kid", "test-key")
-					.claim("upn", "jwt-user")
-					.claim("email", "jwt-user@example.org")
-					.claim("roles", List.of("clerk", "report-analyst"))
-					.signWith(keyPair.getPrivate(), SignatureAlgorithm.RS256)
-					.compact();
+			String token = Jwts.builder().setHeaderParam("kid", "test-key").claim("upn", "jwt-user").claim("email", "jwt-user@example.org")
+					.claim("roles", List.of("clerk", "report-analyst")).signWith(keyPair.getPrivate(), SignatureAlgorithm.RS256).compact();
 
 			JwtAuthenticationConfiguration configuration = JwtAuthenticationConfiguration.T.create();
 			configuration.setJwksUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/jwks");
@@ -87,8 +86,7 @@ public class JwtAuthenticationProcessorTest {
 			AuthenticatedUser authenticated = (AuthenticatedUser) result.get();
 			assertThat(authenticated.getUser().getName()).isEqualTo("jwt-user");
 			assertThat(authenticated.getUser().getEmail()).isEqualTo("jwt-user@example.org");
-			assertThat(authenticated.getUser().getRoles()).extracting(role -> role.getName())
-					.containsExactlyInAnyOrder("clerk", "report-analyst");
+			assertThat(authenticated.getUser().getRoles()).extracting(role -> role.getName()).containsExactlyInAnyOrder("clerk", "report-analyst");
 		} finally {
 			server.stop(0);
 		}
@@ -99,5 +97,77 @@ public class JwtAuthenticationProcessorTest {
 		if (bytes.length > 1 && bytes[0] == 0)
 			bytes = java.util.Arrays.copyOfRange(bytes, 1, bytes.length);
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+	}
+
+	@Test
+	@SuppressWarnings("deprecation")
+	public void testRoleManipulation() throws Exception {
+		KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+		generator.initialize(2048);
+		KeyPair keyPair = generator.generateKeyPair();
+		RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
+
+		String jwks = "{\"keys\":[{\"kid\":\"test-key\",\"kty\":\"RSA\",\"alg\":\"RS256\",\"use\":\"sig\",\"n\":\""
+				+ base64Url(publicKey.getModulus()) + "\",\"e\":\"" + base64Url(publicKey.getPublicExponent()) + "\"}]}";
+
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/jwks", exchange -> {
+			byte[] body = jwks.getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("Content-Type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			exchange.getResponseBody().write(body);
+			exchange.close();
+		});
+		server.start();
+
+		try {
+			String token = Jwts.builder().setHeaderParam("kid", "test-key").claim("upn", "jwt-user").claim("email", "jwt-user@example.org")
+					.claim("roles", List.of("TheMeanHelloPrefixclerk", "TheMeanWorldPrefixreport-analyst", "some-role", "FixedPrefix  WORLD  "))
+					.signWith(keyPair.getPrivate(), SignatureAlgorithm.RS256).compact();
+
+			JwtAuthenticationConfiguration configuration = JwtAuthenticationConfiguration.T.create();
+			configuration.setJwksUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/jwks");
+			configuration.setUsernameClaim("upn");
+			configuration.setEmailClaim("email");
+			configuration.setRolesClaim("roles");
+
+			RoleTransformationRegex regex = RoleTransformationRegex.T.create();
+			regex.setRegex("^TheMean.*Prefix");
+			regex.setReplacement("");
+
+			RoleTransformationRemovePrefix removePrefix = RoleTransformationRemovePrefix.T.create();
+			removePrefix.setPrefix("FixedPrefix");
+
+			RoleTransformationToLowerCase tol = RoleTransformationToLowerCase.T.create();
+
+			RoleTransformationTrim trim = RoleTransformationTrim.T.create();
+
+			configuration.getRoleTransformationConfiguration().add(regex);
+			configuration.getRoleTransformationConfiguration().add(removePrefix);
+			configuration.getRoleTransformationConfiguration().add(tol);
+			configuration.getRoleTransformationConfiguration().add(trim);
+
+			JwtTokenCredentialsAuthenticationServiceProcessor processor = new JwtTokenCredentialsAuthenticationServiceProcessor();
+			processor.setConfiguration(configuration);
+			processor.setJsonMarshaller(new JsonStreamMarshaller());
+			processor.setHttpClientProvider(new DefaultHttpClientProvider());
+			processor.setModuleClassLoader(getClass().getClassLoader());
+
+			JwtTokenCredentials credentials = JwtTokenCredentials.T.create();
+			credentials.setToken(token);
+			AuthenticateCredentials request = AuthenticateCredentials.T.create();
+			request.setCredentials(credentials);
+
+			Maybe<? extends AuthenticateCredentialsResponse> result = processor.processReasoned(null, request);
+			assertThat(result.isSatisfied()).isTrue();
+
+			AuthenticatedUser authenticated = (AuthenticatedUser) result.get();
+			assertThat(authenticated.getUser().getName()).isEqualTo("jwt-user");
+			assertThat(authenticated.getUser().getEmail()).isEqualTo("jwt-user@example.org");
+			assertThat(authenticated.getUser().getRoles()).extracting(role -> role.getName()).containsExactlyInAnyOrder("clerk", "report-analyst",
+					"some-role", "world");
+		} finally {
+			server.stop(0);
+		}
 	}
 }

@@ -39,6 +39,8 @@ import java.util.UUID;
 import java.util.concurrent.locks.Lock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.http.HttpStatus;
@@ -51,6 +53,7 @@ import com.braintribe.cfg.Required;
 import com.braintribe.codec.marshaller.api.CharacterMarshaller;
 import com.braintribe.codec.marshaller.api.DecodingLenience;
 import com.braintribe.codec.marshaller.api.GmDeserializationOptions;
+import com.braintribe.common.lcd.Pair;
 import com.braintribe.gm.model.reason.Maybe;
 import com.braintribe.gm.model.reason.Reason;
 import com.braintribe.gm.model.reason.Reasons;
@@ -85,20 +88,27 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.MalformedJwtException;
 import io.jsonwebtoken.ProtectedHeader;
 import io.jsonwebtoken.SigningKeyResolverAdapter;
+import io.jsonwebtoken.lang.Collections;
 import io.jsonwebtoken.security.SignatureException;
 import tribefire.extension.jwt.model.Jwks;
 import tribefire.extension.jwt.model.JwksKey;
 import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
+import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfigurationSet;
+import tribefire.extension.jwt.model.configuration.RoleTransformationConfig;
+import tribefire.extension.jwt.model.configuration.RoleTransformationRegex;
+import tribefire.extension.jwt.model.configuration.RoleTransformationRemovePrefix;
+import tribefire.extension.jwt.model.configuration.RoleTransformationToLowerCase;
+import tribefire.extension.jwt.model.configuration.RoleTransformationTrim;
 
 public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractAuthenticateCredentialsServiceProcessor<JwtTokenCredentials> {
 	private static final Reason INVALID_CREDENTIALS = Reasons.build(InvalidCredentials.T).text("Invalid Credentials").toReason();
 
 	private static final Logger logger = Logger.getLogger(JwtTokenCredentialsAuthenticationServiceProcessor.class);
 
-	private JwtAuthenticationConfiguration configuration;
+	private JwtAuthenticationConfigurationSet configurationSet;
 	private HttpClientProvider httpClientProvider;
 	private CharacterMarshaller jsonMarshaller;
-	private PeriodicInitialized<Map<String, Key>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
+	private PeriodicInitialized<Map<String, Pair<Key, JwtAuthenticationConfiguration>>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
 	private Supplier<PersistenceGmSession> authSessionProvider = null;
 	private Locking locking = null;
 
@@ -120,7 +130,18 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 
 	@Required
 	public void setConfiguration(JwtAuthenticationConfiguration configuration) {
-		this.configuration = configuration;
+		if (configurationSet != null && !configurationSet.getConfigurations().isEmpty()) {
+			throw new IllegalStateException("Canot accept a singular configuration (" + configuration
+					+ ") over a already configured set of configurations (" + configurationSet + ").");
+		}
+		if (configurationSet == null) {
+			configurationSet = JwtAuthenticationConfigurationSet.T.create();
+			configurationSet.getConfigurations().add(configuration);
+		}
+	}
+	@Required
+	public void setConfigurationSet(JwtAuthenticationConfigurationSet set) {
+		this.configurationSet = set;
 	}
 
 	@Required
@@ -150,24 +171,24 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		try {
 			String token = credentials.getToken();
 
-			Maybe<Map<String, Key>> keyMapMaybe = keyMapHolder.get();
+			Maybe<Map<String, Pair<Key, JwtAuthenticationConfiguration>>> keyMapMaybe = keyMapHolder.get();
 
 			if (keyMapMaybe.isUnsatisfied()) {
 				String tbid = UUID.randomUUID().toString();
-				logger.error("Error while retrieving JWKS keys from " + configuration.getJwksUrl() + " (traceback=" + tbid + "): "
-						+ keyMapMaybe.whyUnsatisfied().stringify());
+				logger.error("Error while retrieving JWKS keys (traceback=" + tbid + "): " + keyMapMaybe.whyUnsatisfied().stringify());
 				return Reasons.build(com.braintribe.gm.model.reason.essential.InternalError.T).text("Internal Error (traceback=" + tbid + ")")
 						.toMaybe();
 			}
 
-			Map<String, Key> keyMap = keyMapMaybe.get();
+			Map<String, Pair<Key, JwtAuthenticationConfiguration>> keyMap = keyMapMaybe.get();
 
-			Maybe<Jwt<?, ?>> jwtMaybe = resolveJwt(token, keyMap);
+			Maybe<Pair<Jwt<?, ?>, JwtAuthenticationConfiguration>> jwtMaybe = resolveJwt(token, keyMap);
 
 			if (jwtMaybe.isUnsatisfied())
 				return jwtMaybe.whyUnsatisfied().asMaybe();
 
-			Jwt<?, ?> jwt = jwtMaybe.get();
+			Jwt<?, ?> jwt = jwtMaybe.get().first;
+			JwtAuthenticationConfiguration configuration = jwtMaybe.get().second;
 
 			ProtectedHeader header = (ProtectedHeader) jwt.getHeader();
 
@@ -201,7 +222,7 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 
 			Set<Role> roles = user.getRoles();
 
-			Stream.of(configuration.getDefaultRoles(), getRolesFromToken(body)) //
+			Stream.of(configuration.getDefaultRoles(), getRolesFromToken(configuration, body)) //
 					.flatMap(Collection::stream)//
 					.distinct() //
 					.map(Roles::roleFromStr) //
@@ -345,98 +366,109 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		return false;
 	}
 
-	private Maybe<Jwt<?, ?>> resolveJwt(String token, Map<String, Key> keyMap) {
-		JwtParser parser = Jwts.parser().setSigningKeyResolver(new SigningKeyResolverAdapter() {
-			@Override
-			public Key resolveSigningKey(JwsHeader jwsHeader, Claims claims) {
-				// null may be returned here from the map which leads to an expected IllegalArgumentException
-				return keyMap.get(jwsHeader.getKeyId());
+	private Maybe<Pair<Jwt<?, ?>, JwtAuthenticationConfiguration>> resolveJwt(String token,
+			Map<String, Pair<Key, JwtAuthenticationConfiguration>> keyMap) {
+		for (Pair<Key, JwtAuthenticationConfiguration> pair : keyMap.values()) {
+			JwtParser parser = Jwts.parser().setSigningKeyResolver(new SigningKeyResolverAdapter() {
+				@Override
+				public Key resolveSigningKey(JwsHeader jwsHeader, Claims claims) {
+					// null may be returned here from the map which leads to an expected IllegalArgumentException
+					return pair.first;
+				}
+			}).build();
+			try {
+				return Maybe.complete(new Pair<>(parser.parse(token), pair.second));
+			} catch (SignatureException | ExpiredJwtException | MalformedJwtException | IllegalArgumentException e) {
+				if (logger.isDebugEnabled())
+					logger.debug("Token " + token + " + could not be verified", e);
+				else
+					logger.info("Token could not be verified", e);
 			}
-		}).build();
-		try {
-			return Maybe.complete(parser.parse(token));
-		} catch (SignatureException | ExpiredJwtException | MalformedJwtException | IllegalArgumentException e) {
-			if (logger.isDebugEnabled())
-				logger.debug("Token " + token + " + could not be verified", e);
-			else
-				logger.info("Token could not be verified", e);
-			return INVALID_CREDENTIALS.asMaybe();
+
 		}
+		return INVALID_CREDENTIALS.asMaybe();
 	}
 
-	private Maybe<Map<String, Key>> getJwksKeys() {
+	private Maybe<Map<String, Pair<Key, JwtAuthenticationConfiguration>>> getJwksKeys() {
 
-		String url = configuration.getJwksUrl();
-		Map<String, Key> keyMap = new LinkedHashMap<>();
+		if (configurationSet == null) {
+			logger.debug("No JWKS configuration available.");
+			return Maybe.complete(Collections.emptyMap());
+		}
 
-		logger.debug(() -> "Trying to get JWKS from: " + url);
-		try (CloseableHttpClient client = httpClientProvider.provideHttpClient()) {
+		Map<String, Pair<Key, JwtAuthenticationConfiguration>> keyMap = new LinkedHashMap<>();
 
-			CloseableHttpResponse response = null;
-			try {
-				HttpGet get = new HttpGet(url);
-				response = client.execute(get);
-				if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
-					return Reasons.build(CommunicationError.T)
-							.text(url + " unexpectedly responded with status code " + response.getStatusLine().getStatusCode()).toMaybe();
-				} else {
-					try (InputStream is = new ResponseEntityInputStream(response)) {
-						DecodingLenience decodingLenience = new DecodingLenience();
-						decodingLenience.setPropertyLenient(true);
+		for (JwtAuthenticationConfiguration configuration : configurationSet.getConfigurations()) {
+			String url = configuration.getJwksUrl();
 
-						Jwks jwks = (Jwks) jsonMarshaller.unmarshall(is, GmDeserializationOptions.deriveDefaults() //
-								.setInferredRootType(Jwks.T) //
-								.setDecodingLenience(decodingLenience) //
-								.build());
+			logger.debug(() -> "Trying to get JWKS from: " + url);
+			try (CloseableHttpClient client = httpClientProvider.provideHttpClient()) {
 
-						logger.debug(() -> "Parsed from " + url + ": " + jwks);
-						List<JwksKey> keys = jwks.getKeys();
-						for (JwksKey key : keys) {
-							String keyId = key.getKid();
-							String mod = key.getN();
-							String exp = key.getE();
-							byte[] modBytes = Base64.getUrlDecoder().decode(mod.getBytes());
-							byte[] expBytes = Base64.getUrlDecoder().decode(exp.getBytes());
-							BigInteger modulus = new BigInteger(1, modBytes);
-							BigInteger exponent = new BigInteger(1, expBytes);
-							RSAPublicKeySpec pubKeySpecification = new RSAPublicKeySpec(modulus, exponent);
-							KeyFactory keyFac = KeyFactory.getInstance("RSA");
-							RSAPublicKey rsaPub = (RSAPublicKey) keyFac.generatePublic(pubKeySpecification);
+				CloseableHttpResponse response = null;
+				try {
+					HttpGet get = new HttpGet(url);
+					response = client.execute(get);
+					if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
+						return Reasons.build(CommunicationError.T)
+								.text(url + " unexpectedly responded with status code " + response.getStatusLine().getStatusCode()).toMaybe();
+					} else {
+						try (InputStream is = new ResponseEntityInputStream(response)) {
+							DecodingLenience decodingLenience = new DecodingLenience();
+							decodingLenience.setPropertyLenient(true);
 
-							if (logger.isDebugEnabled()) {
-								final X509EncodedKeySpec x509EncodedKeySpec = new X509EncodedKeySpec(rsaPub.getEncoded());
-								logger.debug("Base64 encoded key for key Id " + keyId + ": "
-										+ new String(Base64.getEncoder().encode(x509EncodedKeySpec.getEncoded())));
+							Jwks jwks = (Jwks) jsonMarshaller.unmarshall(is, GmDeserializationOptions.deriveDefaults() //
+									.setInferredRootType(Jwks.T) //
+									.setDecodingLenience(decodingLenience) //
+									.build());
+
+							logger.debug(() -> "Parsed from " + url + ": " + jwks);
+							List<JwksKey> keys = jwks.getKeys();
+							for (JwksKey key : keys) {
+								String keyId = key.getKid();
+								String mod = key.getN();
+								String exp = key.getE();
+								byte[] modBytes = Base64.getUrlDecoder().decode(mod.getBytes());
+								byte[] expBytes = Base64.getUrlDecoder().decode(exp.getBytes());
+								BigInteger modulus = new BigInteger(1, modBytes);
+								BigInteger exponent = new BigInteger(1, expBytes);
+								RSAPublicKeySpec pubKeySpecification = new RSAPublicKeySpec(modulus, exponent);
+								KeyFactory keyFac = KeyFactory.getInstance("RSA");
+								RSAPublicKey rsaPub = (RSAPublicKey) keyFac.generatePublic(pubKeySpecification);
+
+								if (logger.isDebugEnabled()) {
+									final X509EncodedKeySpec x509EncodedKeySpec = new X509EncodedKeySpec(rsaPub.getEncoded());
+									logger.debug("Base64 encoded key for key Id " + keyId + ": "
+											+ new String(Base64.getEncoder().encode(x509EncodedKeySpec.getEncoded())));
+								}
+
+								keyMap.put(keyId, new Pair<>(rsaPub, configuration));
 							}
-
-							keyMap.put(keyId, rsaPub);
+						}
+					}
+				} finally {
+					HttpTools.consumeResponse(url, response);
+					if (response != null) {
+						try {
+							response.close();
+						} catch (Exception e) {
+							// Ignore
 						}
 					}
 				}
-			} finally {
-				HttpTools.consumeResponse(url, response);
-				if (response != null) {
-					try {
-						response.close();
-					} catch (Exception e) {
-						// Ignore
-					}
-				}
+			} catch (IOException ioe) {
+				String msg = "Error while reading JWKS keys from " + configuration.getJwksUrl();
+				logger.error(msg, ioe);
+				return Reasons.build(IoError.T).text(msg).toMaybe();
+			} catch (Exception e) {
+				String msg = "Error while reading JWKS keys from " + configuration.getJwksUrl();
+				logger.error(msg, e);
+				return Reasons.build(com.braintribe.gm.model.reason.essential.InternalError.T).text(msg).toMaybe();
 			}
-		} catch (IOException ioe) {
-			String msg = "Error while reading JWKS keys from " + configuration.getJwksUrl();
-			logger.error(msg, ioe);
-			return Reasons.build(IoError.T).text(msg).toMaybe();
-		} catch (Exception e) {
-			String msg = "Error while reading JWKS keys from " + configuration.getJwksUrl();
-			logger.error(msg, e);
-			return Reasons.build(com.braintribe.gm.model.reason.essential.InternalError.T).text(msg).toMaybe();
 		}
-
 		return Maybe.complete(keyMap);
 	}
 
-	protected Collection<String> getRolesFromToken(Map<String, Object> claims) {
+	protected Collection<String> getRolesFromToken(JwtAuthenticationConfiguration configuration, Map<String, Object> claims) {
 
 		Set<String> allRolesCombined = new HashSet<>();
 
@@ -447,6 +479,30 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 				Stream<String> rawRoleValues = claimValuesAsStream(rolesObject);
 				rawRoleValues.forEach(allRolesCombined::add);
 			}
+		}
+
+		Set<RoleTransformationConfig> roleTransformationConfiguration = configuration.getRoleTransformationConfiguration();
+		if (!roleTransformationConfiguration.isEmpty()) {
+			List<UnaryOperator<String>> transformations = roleTransformationConfiguration.stream().map(c -> {
+				if (c instanceof RoleTransformationRegex reg) {
+					return RoleManipulation.regexReplace(reg.getRegex(), reg.getReplacement());
+				}
+				if (c instanceof RoleTransformationRemovePrefix rem) {
+					return RoleManipulation.removePrefix(rem.getPrefix());
+				}
+				if (c instanceof RoleTransformationToLowerCase) {
+					return RoleManipulation.toLowerCase();
+				}
+				if (c instanceof RoleTransformationTrim) {
+					return RoleManipulation.trim();
+				}
+				return (UnaryOperator<String>) t -> t;
+			}).toList();
+
+			UnaryOperator<String> pipeline = transformations.stream().reduce(UnaryOperator.identity(),
+					(first, second) -> s -> second.apply(first.apply(s)));
+
+			allRolesCombined = allRolesCombined.stream().map(pipeline).collect(Collectors.toSet());
 		}
 
 		for (Map.Entry<String, String> rolesEntry : configuration.getClaimRolesAndPrefixes().entrySet()) {
