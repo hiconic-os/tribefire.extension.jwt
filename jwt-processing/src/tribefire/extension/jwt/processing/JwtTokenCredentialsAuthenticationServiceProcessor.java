@@ -92,8 +92,8 @@ import io.jsonwebtoken.lang.Collections;
 import io.jsonwebtoken.security.SignatureException;
 import tribefire.extension.jwt.model.Jwks;
 import tribefire.extension.jwt.model.JwksKey;
-import tribefire.extension.jwt.model.configuration.JwtTrustProvider;
 import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
+import tribefire.extension.jwt.model.configuration.JwtTrustProvider;
 import tribefire.extension.jwt.model.configuration.RoleTransformationConfig;
 import tribefire.extension.jwt.model.configuration.RoleTransformationRegex;
 import tribefire.extension.jwt.model.configuration.RoleTransformationRemovePrefix;
@@ -366,8 +366,8 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		return false;
 	}
 
-	private Maybe<Pair<Jwt<?, ?>, JwtTrustProvider>> resolveJwt(String token,
-			Map<String, Pair<Key, JwtTrustProvider>> keyMap) {
+	private Maybe<Pair<Jwt<?, ?>, JwtTrustProvider>> resolveJwt(String token, Map<String, Pair<Key, JwtTrustProvider>> keyMap) {
+		logger.debug(() -> "Trying to verify token " + token + ". Keys configured: " + keyMap.size());
 		for (Pair<Key, JwtTrustProvider> pair : keyMap.values()) {
 			JwtParser parser = Jwts.parser().setSigningKeyResolver(new SigningKeyResolverAdapter() {
 				@Override
@@ -379,13 +379,14 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 			try {
 				return Maybe.complete(new Pair<>(parser.parse(token), pair.second));
 			} catch (SignatureException | ExpiredJwtException | MalformedJwtException | IllegalArgumentException e) {
-				if (logger.isDebugEnabled())
-					logger.debug("Token " + token + " + could not be verified", e);
-				else
-					logger.info("Token could not be verified", e);
+				if (logger.isTraceEnabled())
+					logger.trace("Token " + token + " + could not be verified", e);
 			}
 
 		}
+
+		logger.info("Token could not be verified: " + token);
+
 		return INVALID_CREDENTIALS.asMaybe();
 	}
 
