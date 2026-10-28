@@ -29,6 +29,7 @@ public interface JwtTrustProvider extends GenericEntity {
 
 	String defaultRoles = "defaultRoles";
 	String jwksUrl = "jwksUrl";
+	String audiences = "audiences";
 	String usernameClaim = "usernameClaim";
 	String emailClaim = "emailClaim";
 	String firstNameClaim = "firstNameClaim";
@@ -52,6 +53,12 @@ public interface JwtTrustProvider extends GenericEntity {
 	@Description("The URL where to download JWKS information.")
 	String getJwksUrl();
 	void setJwksUrl(String jwksUrl);
+
+	@Name("Audiences")
+	@Description("Accepted values of the 'aud' claim, usually the client ID of the app registration. If set, tokens issued for another audience are not accepted by this trust provider. "
+			+ "If empty, the 'appid' query parameter of the JWKS URL (if any) is used to choose between multiple trust providers that are able to verify the same token.")
+	Set<String> getAudiences();
+	void setAudiences(Set<String> audiences);
 
 	@Name("Username Claim")
 	@Description("The claim that contains the user name.")

@@ -17,9 +17,13 @@ package tribefire.extension.jwt.processing;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringReader;
 import java.math.BigInteger;
-import java.security.Key;
+import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
+import java.security.PublicKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.RSAPublicKeySpec;
 import java.security.spec.X509EncodedKeySpec;
@@ -53,7 +57,6 @@ import com.braintribe.cfg.Required;
 import com.braintribe.codec.marshaller.api.CharacterMarshaller;
 import com.braintribe.codec.marshaller.api.DecodingLenience;
 import com.braintribe.codec.marshaller.api.GmDeserializationOptions;
-import com.braintribe.common.lcd.Pair;
 import com.braintribe.gm.model.reason.Maybe;
 import com.braintribe.gm.model.reason.Reason;
 import com.braintribe.gm.model.reason.Reasons;
@@ -80,16 +83,13 @@ import com.braintribe.transport.http.util.HttpTools;
 import com.braintribe.utils.lcd.StringTools;
 
 import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.ExpiredJwtException;
-import io.jsonwebtoken.JwsHeader;
-import io.jsonwebtoken.Jwt;
+import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.MalformedJwtException;
-import io.jsonwebtoken.ProtectedHeader;
-import io.jsonwebtoken.SigningKeyResolverAdapter;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.jackson.io.JacksonDeserializer;
 import io.jsonwebtoken.lang.Collections;
-import io.jsonwebtoken.security.SignatureException;
 import tribefire.extension.jwt.model.Jwks;
 import tribefire.extension.jwt.model.JwksKey;
 import tribefire.extension.jwt.model.configuration.JwtAuthenticationConfiguration;
@@ -105,10 +105,22 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 
 	private static final Logger logger = Logger.getLogger(JwtTokenCredentialsAuthenticationServiceProcessor.class);
 
+	private static final JacksonDeserializer<Map<String, ?>> headerDeserializer = new JacksonDeserializer<>();
+
+	/**
+	 * A key published by the JWKS endpoint of a trust provider. A key id (kid) is only unique within a single JWKS, so multiple trust providers
+	 * may publish keys with the same key id (and even the same key).
+	 */
+	private record KeyCandidate(PublicKey key, JwtTrustProvider provider) {
+	}
+
+	private record VerifiedToken(Jws<Claims> jws, JwtTrustProvider provider) {
+	}
+
 	private JwtAuthenticationConfiguration configurationSet;
 	private HttpClientProvider httpClientProvider;
 	private CharacterMarshaller jsonMarshaller;
-	private PeriodicInitialized<Map<String, Pair<Key, JwtTrustProvider>>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
+	private PeriodicInitialized<Map<String, List<KeyCandidate>>> keyMapHolder = new PeriodicInitialized<>(this::getJwksKeys);
 	private Supplier<PersistenceGmSession> authSessionProvider = null;
 	private Locking locking = null;
 
@@ -171,7 +183,7 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		try {
 			String token = credentials.getToken();
 
-			Maybe<Map<String, Pair<Key, JwtTrustProvider>>> keyMapMaybe = keyMapHolder.get();
+			Maybe<Map<String, List<KeyCandidate>>> keyMapMaybe = keyMapHolder.get();
 
 			if (keyMapMaybe.isUnsatisfied()) {
 				String tbid = UUID.randomUUID().toString();
@@ -180,23 +192,21 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 						.toMaybe();
 			}
 
-			Map<String, Pair<Key, JwtTrustProvider>> keyMap = keyMapMaybe.get();
+			Map<String, List<KeyCandidate>> keyMap = keyMapMaybe.get();
 
-			Maybe<Pair<Jwt<?, ?>, JwtTrustProvider>> jwtMaybe = resolveJwt(token, keyMap);
+			Maybe<VerifiedToken> jwtMaybe = resolveJwt(token, keyMap);
 
 			if (jwtMaybe.isUnsatisfied())
 				return jwtMaybe.whyUnsatisfied().asMaybe();
 
-			Jwt<?, ?> jwt = jwtMaybe.get().first;
-			JwtTrustProvider configuration = jwtMaybe.get().second;
+			Jws<Claims> jws = jwtMaybe.get().jws();
+			JwtTrustProvider configuration = jwtMaybe.get().provider();
 
-			ProtectedHeader header = (ProtectedHeader) jwt.getHeader();
+			String keyId = jws.getHeader().getKeyId();
 
-			String keyId = header.getKeyId();
+			logger.debug(() -> "Successfully parsed token " + token + " with key " + keyId + " from " + configuration.getJwksUrl());
 
-			logger.debug(() -> "Successfully parsed token " + token + " with key " + keyId);
-
-			Claims body = (Claims) jwt.getPayload();
+			Claims body = jws.getPayload();
 
 			String userId = (String) body.get(configuration.getUsernameClaim());
 
@@ -366,38 +376,125 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 		return false;
 	}
 
-	private Maybe<Pair<Jwt<?, ?>, JwtTrustProvider>> resolveJwt(String token, Map<String, Pair<Key, JwtTrustProvider>> keyMap) {
-		logger.debug(() -> "Trying to verify token " + token + ". Keys configured: " + keyMap.size());
-		for (Pair<Key, JwtTrustProvider> pair : keyMap.values()) {
-			JwtParser parser = Jwts.parser().setSigningKeyResolver(new SigningKeyResolverAdapter() {
-				@Override
-				public Key resolveSigningKey(JwsHeader jwsHeader, Claims claims) {
-					// null may be returned here from the map which leads to an expected IllegalArgumentException
-					return pair.first;
-				}
-			}).build();
-			try {
-				return Maybe.complete(new Pair<>(parser.parse(token), pair.second));
-			} catch (SignatureException | ExpiredJwtException | MalformedJwtException | IllegalArgumentException e) {
-				if (logger.isTraceEnabled())
-					logger.trace("Token " + token + " + could not be verified", e);
-			}
+	private Maybe<VerifiedToken> resolveJwt(String token, Map<String, List<KeyCandidate>> keyMap) {
+		// The kid is taken from the not yet verified header and is therefore only used to preselect the candidate keys
+		String keyId = readUnverifiedKeyId(token);
+		List<KeyCandidate> candidates = keyId != null //
+				? keyMap.getOrDefault(keyId, List.of()) //
+				: keyMap.values().stream().flatMap(List::stream).toList();
 
+		logger.debug(() -> "Trying to verify token " + token + " with key id " + keyId + ". Candidate keys: " + candidates.size());
+
+		List<VerifiedToken> verifiedTokens = new ArrayList<>();
+		for (KeyCandidate candidate : candidates) {
+			JwtParser parser = Jwts.parser().verifyWith(candidate.key()).build();
+			try {
+				verifiedTokens.add(new VerifiedToken(parser.parseSignedClaims(token), candidate.provider()));
+			} catch (JwtException | IllegalArgumentException e) {
+				if (logger.isTraceEnabled())
+					logger.trace("Token " + token + " could not be verified with key from " + candidate.provider().getJwksUrl(), e);
+			}
 		}
 
-		logger.info("Token could not be verified: " + token);
+		if (verifiedTokens.isEmpty()) {
+			logger.info("Token could not be verified: " + token);
+			return INVALID_CREDENTIALS.asMaybe();
+		}
 
-		return INVALID_CREDENTIALS.asMaybe();
+		return selectTrustProvider(token, verifiedTokens);
 	}
 
-	private Maybe<Map<String, Pair<Key, JwtTrustProvider>>> getJwksKeys() {
+	/**
+	 * Multiple trust providers may be able to verify the same token, e.g. when their JWKS endpoints belong to the same Entra tenant and
+	 * therefore publish the same signing keys. In that case the (verified) aud claim is used to find the matching trust provider.
+	 */
+	// TODO: 'iss' and 'azp'/'appid' are not validated as trust provider conditions yet. 'aud' is only enforced for trust providers with
+	// explicitly configured audiences. If trust providers that share keys require different token policies, add explicit validation for them.
+	private Maybe<VerifiedToken> selectTrustProvider(String token, List<VerifiedToken> verifiedTokens) {
+		Set<String> audience = Optional.ofNullable(verifiedTokens.get(0).jws().getPayload().getAudience()).orElse(Set.of());
+
+		List<VerifiedToken> accepted = verifiedTokens.stream() //
+				.filter(v -> acceptsAudience(v.provider(), audience)) //
+				.toList();
+
+		if (accepted.isEmpty()) {
+			logger.info("Token audience " + audience + " is not accepted by any trust provider: " + token);
+			return INVALID_CREDENTIALS.asMaybe();
+		}
+
+		List<VerifiedToken> matching = accepted.stream() //
+				.filter(v -> matchesAudience(v.provider(), audience)) //
+				.toList();
+
+		List<VerifiedToken> selection = matching.isEmpty() ? accepted : matching;
+
+		if (logger.isDebugEnabled() && selection.stream().map(VerifiedToken::provider).distinct().count() > 1)
+			logger.debug("Token with audience " + audience + " can be handled by multiple trust providers. Choosing the first one: "
+					+ selection.get(0).provider().getJwksUrl());
+
+		return Maybe.complete(selection.get(0));
+	}
+
+	private static boolean acceptsAudience(JwtTrustProvider provider, Set<String> audience) {
+		Set<String> configuredAudiences = provider.getAudiences();
+		return configuredAudiences.isEmpty() || audience.stream().anyMatch(configuredAudiences::contains);
+	}
+
+	private static boolean matchesAudience(JwtTrustProvider provider, Set<String> audience) {
+		Set<String> configuredAudiences = provider.getAudiences();
+		if (!configuredAudiences.isEmpty())
+			return audience.stream().anyMatch(configuredAudiences::contains);
+
+		String appId = getAppIdFromJwksUrl(provider.getJwksUrl());
+		return appId != null && audience.contains(appId);
+	}
+
+	/**
+	 * Entra ID JWKS URLs may carry the client ID of the app registration, e.g. <code>.../discovery/keys?appid=&lt;client-id&gt;</code>
+	 */
+	private static String getAppIdFromJwksUrl(String jwksUrl) {
+		if (jwksUrl == null)
+			return null;
+
+		try {
+			String query = URI.create(jwksUrl).getRawQuery();
+			if (query == null)
+				return null;
+
+			for (String param : query.split("&")) {
+				int index = param.indexOf('=');
+				if (index > 0 && param.substring(0, index).equalsIgnoreCase("appid"))
+					return URLDecoder.decode(param.substring(index + 1), StandardCharsets.UTF_8);
+			}
+		} catch (IllegalArgumentException e) {
+			logger.trace(() -> "Could not parse JWKS URL " + jwksUrl, e);
+		}
+		return null;
+	}
+
+	private static String readUnverifiedKeyId(String token) {
+		int index = token.indexOf('.');
+		if (index < 0)
+			return null;
+
+		try {
+			byte[] headerBytes = Decoders.BASE64URL.decode(token.substring(0, index));
+			Map<String, ?> header = headerDeserializer.deserialize(new StringReader(new String(headerBytes, StandardCharsets.UTF_8)));
+			return header.get("kid") instanceof String kid ? kid : null;
+		} catch (RuntimeException e) {
+			logger.trace(() -> "Could not read header of token " + token, e);
+			return null;
+		}
+	}
+
+	private Maybe<Map<String, List<KeyCandidate>>> getJwksKeys() {
 
 		if (configurationSet == null) {
 			logger.debug("No JWKS configuration available.");
 			return Maybe.complete(Collections.emptyMap());
 		}
 
-		Map<String, Pair<Key, JwtTrustProvider>> keyMap = new LinkedHashMap<>();
+		Map<String, List<KeyCandidate>> keyMap = new LinkedHashMap<>();
 
 		for (JwtTrustProvider configuration : configurationSet.getTrustProviders()) {
 			String url = configuration.getJwksUrl();
@@ -442,7 +539,7 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 											+ new String(Base64.getEncoder().encode(x509EncodedKeySpec.getEncoded())));
 								}
 
-								keyMap.put(keyId, new Pair<>(rsaPub, configuration));
+								keyMap.computeIfAbsent(keyId, k -> new ArrayList<>()).add(new KeyCandidate(rsaPub, configuration));
 							}
 						}
 					}
