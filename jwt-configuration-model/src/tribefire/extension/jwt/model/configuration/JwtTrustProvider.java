@@ -113,4 +113,9 @@ public interface JwtTrustProvider extends GenericEntity {
 	@Name("Role Transformations")
 	Set<RoleTransformationConfig> getRoleTransformationConfiguration();
 	void setRoleTransformationConfiguration(Set<RoleTransformationConfig> roleTransformationConfiguration);
+
+	@Name("Apply Token Expiry on Session")
+	@Initializer("true")
+	boolean getApplyTokenExpiryOnSession();
+	void setApplyTokenExpiryOnSession(boolean applyTokenExpiryOnSession);
 }

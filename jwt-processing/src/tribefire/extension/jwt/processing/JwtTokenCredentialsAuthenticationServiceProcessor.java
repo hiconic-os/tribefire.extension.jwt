@@ -108,8 +108,8 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 	private static final JacksonDeserializer<Map<String, ?>> headerDeserializer = new JacksonDeserializer<>();
 
 	/**
-	 * A key published by the JWKS endpoint of a trust provider. A key id (kid) is only unique within a single JWKS, so multiple trust providers
-	 * may publish keys with the same key id (and even the same key).
+	 * A key published by the JWKS endpoint of a trust provider. A key id (kid) is only unique within a single JWKS, so multiple trust providers may
+	 * publish keys with the same key id (and even the same key).
 	 */
 	private record KeyCandidate(PublicKey key, JwtTrustProvider provider) {
 	}
@@ -258,9 +258,11 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 				}
 			}
 
-			// transfer expiry
-			Optional.ofNullable(body.getExpiration()) //
-					.ifPresent(authenticatedUser::setExpiryDate);
+			if (configuration.getApplyTokenExpiryOnSession()) {
+				// transfer expiry
+				Optional.ofNullable(body.getExpiration()) //
+						.ifPresent(authenticatedUser::setExpiryDate);
+			}
 
 			authenticatedUser.setInvalidateCredentialsOnLogout(configuration.getInvalidateTokenCredentialsOnLogout());
 
@@ -405,8 +407,8 @@ public class JwtTokenCredentialsAuthenticationServiceProcessor extends AbstractA
 	}
 
 	/**
-	 * Multiple trust providers may be able to verify the same token, e.g. when their JWKS endpoints belong to the same Entra tenant and
-	 * therefore publish the same signing keys. In that case the (verified) aud claim is used to find the matching trust provider.
+	 * Multiple trust providers may be able to verify the same token, e.g. when their JWKS endpoints belong to the same Entra tenant and therefore
+	 * publish the same signing keys. In that case the (verified) aud claim is used to find the matching trust provider.
 	 */
 	// TODO: 'iss' and 'azp'/'appid' are not validated as trust provider conditions yet. 'aud' is only enforced for trust providers with
 	// explicitly configured audiences. If trust providers that share keys require different token policies, add explicit validation for them.
